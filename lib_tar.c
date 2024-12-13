@@ -1,4 +1,5 @@
 #include "lib_tar.h"
+#include <string.h>
 #define TAR_CHECKSUM_SIZE 8
 #define TAR_MAGIC_OFFSET 257
 #define TAR_VERSION_OFFSET 263
@@ -55,12 +56,12 @@ int check_archive(int tar_fd) {
         }
 
         // Vérifie la valeur magique
-        if (strncmp((char *)(buffer + TAR_MAGIC_OFFSET), TMAGIC, TMAGLEN) != 0) {
+        if (strncmp((char *)(buffer + TAR_MAGIC_OFFSET), "ustar\0", TMAGLEN) != 0) {
             return -1;
         }
 
         // Vérifie la version
-        if (strncmp((char *)(buffer + TAR_VERSION_OFFSET), TVERSION, TVERSLEN) != 0) {
+        if (strncmp((char *)(buffer + TAR_VERSION_OFFSET), "00", TVERSLEN) != 0) {
             return -2;
         }
 
@@ -82,13 +83,12 @@ int check_archive(int tar_fd) {
 }
 
 // Just a function to regroup "is_dir", "is_file", "is_symlink" because they are very similar
-int is_smth(int tar_fd, char *path, char *type){
+int is_smth(int tar_fd, char *path, char type){
 
         uint8_t buffer[TAR_BLOCK_SIZE];
 
     // Go back to the beginning of the tar
     if (lseek(tar_fd, 0, SEEK_SET) == -1) {
-        perror("lseek");
         return 0;
     }
 
@@ -132,7 +132,7 @@ int is_smth(int tar_fd, char *path, char *type){
  *         any other value otherwise.
  */
 int is_dir(int tar_fd, char *path) {
-    return is_smth(tar_fd, path, DIRTYPE);
+    return is_smth(tar_fd, path, (char) DIRTYPE);
 }
 
 /**
@@ -145,7 +145,7 @@ int is_dir(int tar_fd, char *path) {
  *         any other value otherwise.
  */
 int is_file(int tar_fd, char *path) {
-    return is_smth(tar_fd, path, REGTYPE);
+    return is_smth(tar_fd, path, (char) REGTYPE);
 }
 
 /**
@@ -157,7 +157,7 @@ int is_file(int tar_fd, char *path) {
  *         any other value otherwise.
  */
 int is_symlink(int tar_fd, char *path) {
-    return is_smth(tar_fd, path, SYMTYPE);
+    return is_smth(tar_fd, path, (char) SYMTYPE);
 }
 
 
