@@ -1,5 +1,9 @@
 #include "lib_tar.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdint.h>
 #define TAR_CHECKSUM_SIZE 8
 #define TAR_MAGIC_OFFSET 257
 #define TAR_VERSION_OFFSET 263
@@ -205,6 +209,68 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
  *         the end of the file.
  *
  */
+
+static size_t octal_s(const char *octal){
+    size_t size = 0;
+    sscanf(octal, "%zo", &size);
+    return size;
+
+}
+
+
 ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len) {
-    return 0;
+    
+    if (tar_fd < 0 || !path || !dest || !len || *len == 0){
+        return -1;
+    }
+
+    lseek(tar_fd, 0, SEEK_SET);
+
+    char block[TAR_BLOCK_SIZE];
+    char file_n[TAR_NAME_SIZE];
+    char file_s[12];
+    size_t file_size;
+
+    while(read(tar_fd, block, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE){
+        strncpy(file_n, block, TAR_NAME_SIZE);
+        file_n[TAR_NAME_SIZE - 1] = '\0';
+        char flag = block[TAR_TYPEFLAG_OFFSET];
+
+        strncpy(file_s, block + 124,12);
+        file_s[11] = '\0';
+        file_size = octal_s(file_s);
+
+        if (strcmp(file_n, path) == 0){
+            if(flag != '0'){
+                return -1;
+            }
+
+        if(offset >= file_size){
+            return -2;
+        }
+
+        size_t bytes_r = *len;
+        if(offset + bytes_r > file_size){
+            bytes_r = file_size - offset;
+        }
+
+        lseek(tar_fd, offset, SEEK_CUR);
+
+        if(bytes_r < 0){
+            return -1;
+        }
+        
+        *len = bytes_r;
+
+        if(offset + bytes_r == file_size){
+            return 0;
+        }
+
+        return file_size - (offset + bytes_r);
+        }
+
+    size_t blocks = (file_size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
+    lseek(tar_fd, blocks * TAR_BLOCK_SIZE, SEEK_CUR);
+    }
+    return - 1;
 }
