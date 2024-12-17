@@ -321,27 +321,42 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
         return -1;
     }
 
-    lseek(tar_fd, 0, SEEK_SET);
+    if(lseek(tar_fd, 0, SEEK_SET) == 1){
+        return -1;
+    }
 
-    char block[TAR_BLOCK_SIZE];
-    char file_n[TAR_NAME_SIZE];
-    char file_s[12];
+    uint8_t buffer[TAR_BLOCK_SIZE];
     size_t file_size;
 
-    while(read(tar_fd, block, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE){
-        strncpy(file_n, block, TAR_NAME_SIZE);
-        file_n[TAR_NAME_SIZE - 1] = '\0';
-        char flag = block[TAR_TYPEFLAG_OFFSET];
-
-        strncpy(file_s, block + 124,12);
-        file_s[11] = '\0';
-        file_size = octal_s(file_s);
-
-        if (strcmp(file_n, path) == 0){
-            if(flag != '0'){
-                return -1;
+    while(read(tar_fd, buffer, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE){
+        int is_null = 1;
+        for(int i = 0; i < TAR_BLOCK_SIZE; i++){
+            if(buffer[i] != 0){
+                is_null = 0;
+                break;
             }
+        }
+        if(is_null){
+            break;
+        }
 
+        char name[TAR_NAME_SIZE + 1];
+        memcpy(name,buffer, TAR_NAME_SIZE);
+        name[TAR_NAME_SIZE] = '\0';
+
+        char flag = buffer[TAR_TYPEFLAG_OFFSET];
+        if(strcmp(name, path) == 0){
+            if(flag == SYMTYPE){
+                char link[TAR_NAME_SIZE + 1];
+                memcpy(link, buffer+TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
+                link[TAR_NAME_SIZE] = '\0';
+                return read_file(tar_fd, link, offset, dest, len);
+            } 
+        } else if (flag != REGTYPE){
+            return -1;
+        }
+
+        file_size = octal_s((char *)(buffer + 124));
         if(offset >= file_size){
             return -2;
         }
@@ -350,6 +365,44 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
         if(offset + bytes_r > file_size){
             bytes_r = file_size - offset;
         }
+
+        size_t blocks_skip = offset / TAR_BLOCK_SIZE;
+        size_t offset_block = offset % TAR_BLOCK_SIZE;
+
+        if(lseek(tar_fd, blocks_skip * TAR_BLOCK_SIZE, SEEK_CUR) == -1){
+            return -1;
+        }
+
+        size_t rest = bytes_r;
+        size_t total_r = 0;
+
+        while(rest > 0){
+            uint8_t data_block[TAR_BLOCK_SIZE];
+            if(read(tar_fd, data_block, TAR_BLOCK_SIZE)!= TAR_BLOCK_SIZE){
+                return -1;
+            }
+
+            size_t copy = TAR_BLOCK_SIZE - offset_block;
+            if(copy > rest){
+                copy = rest;
+            }
+
+            memcpy(dest + total_r, data_block + offset_block, copy);
+            total_r += copy;
+            rest -= copy;
+
+            offset_block = 0;
+        }
+
+        *len = bytes_r;
+
+        if(offset + bytes_r == file_size){
+            return 0;
+        }
+
+        return file_size - (offset + bytes_r);
+
+
 
         lseek(tar_fd, offset, SEEK_CUR);
 
@@ -364,10 +417,12 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
         }
 
         return file_size - (offset + bytes_r);
-        }
-
-    size_t blocks = (file_size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
-    lseek(tar_fd, blocks * TAR_BLOCK_SIZE, SEEK_CUR);
     }
-    return - 1;
+
+    file_size = octal_s((char*)(buffer + 124));
+    size_t blocks_skip = (file_size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
+    if(lseek(tar_fd, blocks_skip * TAR_BLOCK_SIZE, SEEK_CUR) == -1){
+        return -1;
+    }
+    return -1;
 }
