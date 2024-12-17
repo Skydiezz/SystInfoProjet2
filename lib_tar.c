@@ -11,6 +11,7 @@
 #define TAR_BLOCK_SIZE 512
 #define TAR_NAME_SIZE 100
 #define TAR_TYPEFLAG_OFFSET 156
+#define TAR_LINKNAME_OFFSET 157
 
 // Function to calculate the checksum to make sure the checksum in the header is correct
 
@@ -89,7 +90,7 @@ int check_archive(int tar_fd) {
 // Just a function to regroup "is_dir", "is_file", "is_symlink" because they are very similar
 int is_smth(int tar_fd, char *path, char type){
 
-        uint8_t buffer[TAR_BLOCK_SIZE];
+    uint8_t buffer[TAR_BLOCK_SIZE];
 
     // Go back to the beginning of the tar
     if (lseek(tar_fd, 0, SEEK_SET) == -1) {
@@ -188,7 +189,51 @@ int is_symlink(int tar_fd, char *path) {
  *         any other value otherwise.
  */
 int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
-    return 0;
+    uint8_t buffer[TAR_BLOCK_SIZE];
+    size_t entries_found = 0;
+
+
+    // Go back to the beginning of the tar
+    if (lseek(tar_fd, 0, SEEK_SET) == -1) {
+        return 0;
+    }
+    size_t path_len = strlen(path);
+    while (read(tar_fd, buffer, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
+
+        int is_null_block = 1;
+        for (int i = 0; i < TAR_BLOCK_SIZE; i++) {
+            if (buffer[i] != 0) {
+                is_null_block = 0;
+                break;
+            }
+        }
+        if (is_null_block) {
+            break;
+        }
+
+        char name[TAR_NAME_SIZE + 1];
+        memcpy(name, buffer, TAR_NAME_SIZE);
+        name[TAR_NAME_SIZE] = '\0';
+
+        // Check if the entry matches the given path
+        if (strncmp(name, path, path_len) == 0) {
+            // Ensure it is not a recursive match
+            const char *relative_path = name + path_len;
+            if (strchr(relative_path, '/') == NULL || buffer[TAR_TYPEFLAG_OFFSET] == DIRTYPE) {
+                // Add to entries if there's space
+                if (entries_found < *no_entries) {
+                    if(buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE){
+                        strncpy(entries[entries_found], buffer[TAR_LINKNAME_OFFSET], TAR_NAME_SIZE);
+                    } else {
+                        strncpy(entries[entries_found], name, TAR_NAME_SIZE);
+                    }
+                }
+                entries_found++;
+            }
+        }
+    }
+    *no_entries = entries_found;
+    return entries_found > 0 ? 1 : 0;
 }
 
 /**
