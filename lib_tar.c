@@ -13,6 +13,55 @@
 #define TAR_TYPEFLAG_OFFSET 156
 #define TAR_LINKNAME_OFFSET 157
 
+/**
+ * Checks whether an entry exists in the archive.
+ *
+ * @param tar_fd A file descriptor pointing to the start of a valid tar archive file.
+ * @param path A path to an entry in the archive.
+ *
+ * @return zero if no entry at the given path exists in the archive,
+ *         any other value otherwise.
+ */
+int exists(int tar_fd, char *path){
+
+    uint8_t buffer[TAR_BLOCK_SIZE];
+
+    // Go back to the beginning of the tar
+    if (lseek(tar_fd, 0, SEEK_SET) == -1) {
+        return 0;
+    }
+
+    while (read(tar_fd, buffer, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
+
+        int is_null_block = 1;
+        for (int i = 0; i < TAR_BLOCK_SIZE; i++) {
+            if (buffer[i] != 0) {
+                is_null_block = 0;
+                break;
+            }
+        }
+        if (is_null_block) {
+            break;
+        }
+
+        char name[TAR_NAME_SIZE + 1];
+        memcpy(name, buffer, TAR_NAME_SIZE);
+        name[TAR_NAME_SIZE] = '\0';
+
+        if (strcmp(name, path) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+
+
+}
+
+
+
+
+
+
 // Function to calculate the checksum to make sure the checksum in the header is correct
 
 int calculate_checksum(const uint8_t *header) {
