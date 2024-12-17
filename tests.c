@@ -59,9 +59,9 @@ int main(int argc, char **argv){
     int ret = check_archive(fd);
     list(fd, path, entries, nentries);
 
-    printf("The list of archive is :");
+    printf("The list of archive is :\n");
     for(int i=0; entries[i] != NULL; i++){
-        printf("  %s\n", entries[i]);
+        printf(" %s\n", entries[i]);
     }
     printf("check_archive returned %d\n", ret);
     

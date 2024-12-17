@@ -109,13 +109,19 @@ int check_archive(int tar_fd) {
             break;
         }
 
+        if (strncmp((char *)(buffer + TAR_MAGIC_OFFSET), "", TMAGLEN)==0){
+            continue;
+        }
+
+
         // Vérifie la valeur magique
-        if (strncmp((char *)(buffer + TAR_MAGIC_OFFSET), TMAGIC, TMAGLEN) != 0) {
+        if (strncmp((char *)(buffer + TAR_MAGIC_OFFSET), TMAGIC, TMAGLEN) != 0){
             return -1;
         }
 
         // Vérifie la version
-        if (strncmp((char *)(buffer + TAR_VERSION_OFFSET), "00", TVERSLEN) != 0) {
+        if (strncmp((char *)(buffer + TAR_VERSION_OFFSET), TVERSION, TVERSLEN) != 0) {
+   
             return -2;
         }
 
@@ -260,14 +266,13 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
             break;
         }
 
-        char name[TAR_NAME_SIZE + 2];
+        char name[TAR_NAME_SIZE + 1];
         memcpy(name, buffer, TAR_NAME_SIZE);
-        name[TAR_NAME_SIZE-1] = '/';
         name[TAR_NAME_SIZE] = '\0';
 
         // Check if the entry matches the given path
         if (strncmp(name, path, path_len) == 0) {
-            if (strncmp(name, path, path_len) == 0 && strlen(name)-2 > path_len) {
+            if (strncmp(name, path, path_len) == 0 && strlen(name)-1 > path_len) {
                 if (entries_found < *no_entries) {
                     // Allocate memory for the entry
                     entries[entries_found] = malloc(TAR_NAME_SIZE + 1);
@@ -327,113 +332,133 @@ static size_t octal_s(const char *octal){
 
 
 ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len) {
+    if (tar_fd < 0 || !path || !dest || !len || *len == 0) {
+        return -1;
+    }
+
+    uint8_t header[TAR_BLOCK_SIZE];
+    char current_p[TAR_BLOCK_SIZE + 1];
+    strncpy(current_p, path, TAR_NAME_SIZE);
+    current_p[TAR_NAME_SIZE] = '\0';
+
+    if (lseek(tar_fd, 0, SEEK_SET) == -1) {
+        return -1;
+    }
+
+    int symlink_d = 0;
+    const int MAX_SYMLINK_D = 10;
+
+    while(symlink_d < MAX_SYMLINK_D){
+        if(lseek(tar_fd, 0, SEEK_SET) == -1){
+            return -1;
+        }
     
-    if (tar_fd < 0 || !path || !dest || !len || *len == 0){
-        return -1;
-    }
-
-    if(lseek(tar_fd, 0, SEEK_SET) == 1){
-        return -1;
-    }
-
-    uint8_t buffer[TAR_BLOCK_SIZE];
-    size_t file_size;
-
-    while(read(tar_fd, buffer, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE){
-        int is_null = 1;
-        for(int i = 0; i < TAR_BLOCK_SIZE; i++){
-            if(buffer[i] != 0){
-                is_null = 0;
+    while (read(tar_fd, header, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
+        int is_null_block = 1;
+        for (int i = 0; i < TAR_BLOCK_SIZE; i++) {
+            if (header[i] != 0) {
+                is_null_block = 0;
                 break;
             }
         }
-        if(is_null){
+        if (is_null_block) {
             break;
         }
 
-        char name[TAR_NAME_SIZE + 1];
-        memcpy(name,buffer, TAR_NAME_SIZE);
-        name[TAR_NAME_SIZE] = '\0';
+        char file_name[TAR_NAME_SIZE + 1];
+        memcpy(file_name, header, TAR_NAME_SIZE);
+        file_name[TAR_NAME_SIZE] = '\0';
 
-        char flag = buffer[TAR_TYPEFLAG_OFFSET];
-        if(strcmp(name, path) == 0){
-            if(flag == SYMTYPE){
-                char link[TAR_NAME_SIZE + 1];
-                memcpy(link, buffer+TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
-                link[TAR_NAME_SIZE] = '\0';
-                return read_file(tar_fd, link, offset, dest, len);
-            } 
-        } else if (flag != REGTYPE){
-            return -1;
-        }
+        if(strcmp(file_name, current_p) == 0){
+            char typeflag = header[TAR_TYPEFLAG_OFFSET];
 
-        file_size = octal_s((char *)(buffer + 124));
-        if(offset >= file_size){
-            return -2;
-        }
+            if(typeflag == SYMTYPE){
+                char linkname[TAR_NAME_SIZE + 1];
+                memcpy(linkname, header + TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
+                linkname[TAR_NAME_SIZE] = '\0';
 
-        size_t bytes_r = *len;
-        if(offset + bytes_r > file_size){
-            bytes_r = file_size - offset;
-        }
+                strncpy(current_p, linkname, TAR_NAME_SIZE);
+                current_p[TAR_NAME_SIZE] = '\0';
+                symlink_d++;
+                break;
+            }
 
-        size_t blocks_skip = offset / TAR_BLOCK_SIZE;
-        size_t offset_block = offset % TAR_BLOCK_SIZE;
-
-        if(lseek(tar_fd, blocks_skip * TAR_BLOCK_SIZE, SEEK_CUR) == -1){
-            return -1;
-        }
-
-        size_t rest = bytes_r;
-        size_t total_r = 0;
-
-        while(rest > 0){
-            uint8_t data_block[TAR_BLOCK_SIZE];
-            if(read(tar_fd, data_block, TAR_BLOCK_SIZE)!= TAR_BLOCK_SIZE){
+            if (typeflag != REGTYPE) {
                 return -1;
             }
 
-            size_t copy = TAR_BLOCK_SIZE - offset_block;
-            if(copy > rest){
-                copy = rest;
+            char size_str[12];
+            memcpy(size_str, header + 124, 11);
+            size_str[11] = '\0';
+            size_t file_size = octal_s(size_str);
+
+            if (offset >= file_size) {
+                return -2;
             }
 
-            memcpy(dest + total_r, data_block + offset_block, copy);
-            total_r += copy;
-            rest -= copy;
+            size_t bytes_to_read = *len;
+            if (offset + bytes_to_read > file_size) {
+                bytes_to_read = file_size - offset;
+            }
 
-            offset_block = 0;
+            size_t blocks_to_skip = offset / TAR_BLOCK_SIZE;
+            size_t block_offset = offset % TAR_BLOCK_SIZE;
+            
+            for (size_t i = 0; i < blocks_to_skip; i++) {
+                if (read(tar_fd, header, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+                    return -1;
+                }
+            }
+
+            uint8_t first_block[TAR_BLOCK_SIZE];
+            if (read(tar_fd, first_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+                return -1;
+            }
+
+            size_t first_copy = (TAR_BLOCK_SIZE - block_offset < bytes_to_read) ? 
+                TAR_BLOCK_SIZE - block_offset : bytes_to_read;
+            memcpy(dest, first_block + block_offset, first_copy);
+
+            size_t total_read = first_copy;
+            while (total_read < bytes_to_read) {
+                size_t remaining = bytes_to_read - total_read;
+                size_t to_read = remaining > TAR_BLOCK_SIZE ? TAR_BLOCK_SIZE : remaining;
+                
+                if (read(tar_fd, first_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+                    return -1;
+                }
+                
+                memcpy(dest + total_read, first_block, to_read);
+                total_read += to_read;
+            }
+
+            
+            *len = total_read;
+
+            
+            return (offset + total_read == file_size) ? 0 : (file_size - (offset + total_read));
         }
 
-        *len = bytes_r;
-
-        if(offset + bytes_r == file_size){
-            return 0;
-        }
-
-        return file_size - (offset + bytes_r);
-
-
-
-        lseek(tar_fd, offset, SEEK_CUR);
-
-        if(bytes_r < 0){
-            return -1;
-        }
         
-        *len = bytes_r;
-
-        if(offset + bytes_r == file_size){
-            return 0;
+        char size_str[12];
+        memcpy(size_str, header + 124, 11);
+        size_str[11] = '\0';
+        size_t file_size = octal_s(size_str);
+        size_t blocks = (file_size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
+        
+        
+        for (size_t i = 0; i < blocks; i++) {
+            uint8_t skip_block[TAR_BLOCK_SIZE];
+            if (read(tar_fd, skip_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+                return -1;
+            }
         }
-
-        return file_size - (offset + bytes_r);
     }
-
-    file_size = octal_s((char*)(buffer + 124));
-    size_t blocks_skip = (file_size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
-    if(lseek(tar_fd, blocks_skip * TAR_BLOCK_SIZE, SEEK_CUR) == -1){
-        return -1;
+    if(symlink_d > 0 && strcmp(current_p, path) == 0){
+        break;
     }
+}
+
+
     return -1;
 }
