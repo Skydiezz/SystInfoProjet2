@@ -110,7 +110,7 @@ int check_archive(int tar_fd) {
         }
 
         // Vérifie la valeur magique
-        if (strncmp((char *)(buffer + TAR_MAGIC_OFFSET), "ustar\0", TMAGLEN) != 0) {
+        if (strncmp((char *)(buffer + TAR_MAGIC_OFFSET), TMAGIC, TMAGLEN) != 0) {
             return -1;
         }
 
@@ -241,14 +241,14 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
     uint8_t buffer[TAR_BLOCK_SIZE];
     size_t entries_found = 0;
 
-
     // Go back to the beginning of the tar
     if (lseek(tar_fd, 0, SEEK_SET) == -1) {
         return 0;
     }
+
     size_t path_len = strlen(path);
     while (read(tar_fd, buffer, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
-
+        // Check for null block
         int is_null_block = 1;
         for (int i = 0; i < TAR_BLOCK_SIZE; i++) {
             if (buffer[i] != 0) {
@@ -260,34 +260,45 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
             break;
         }
 
-        char name[TAR_NAME_SIZE + 1];
+        char name[TAR_NAME_SIZE + 2];
         memcpy(name, buffer, TAR_NAME_SIZE);
+        name[TAR_NAME_SIZE-1] = '/';
         name[TAR_NAME_SIZE] = '\0';
 
         // Check if the entry matches the given path
         if (strncmp(name, path, path_len) == 0) {
-            // Ensure it is not a recursive match
-            const char *relative_path = name + path_len;
-            if (strchr(relative_path, '/') == NULL || buffer[TAR_TYPEFLAG_OFFSET] == DIRTYPE) {
-                // Add to entries if there's space
+            if (strncmp(name, path, path_len) == 0 && strlen(name)-2 > path_len) {
                 if (entries_found < *no_entries) {
-                    if(buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE){
+                    // Allocate memory for the entry
+                    entries[entries_found] = malloc(TAR_NAME_SIZE + 1);
+                    if (entries[entries_found] == NULL) {
+                        fprintf(stderr, "Memory allocation failed\n");
+                        // Clean up already allocated entries
+                        for (size_t i = 0; i < entries_found; i++) {
+                            free(entries[i]);
+                        }
+                        return 0;
+                    }
+
+                    if (buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE) {
                         char linkname[TAR_NAME_SIZE + 1];
-                        memcpy(linkname, buffer+TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
+                        memcpy(linkname, buffer + TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
                         linkname[TAR_NAME_SIZE] = '\0';
                         strncpy(entries[entries_found], linkname, TAR_NAME_SIZE);
+                        entries[entries_found][TAR_NAME_SIZE] = '\0';
                     } else {
                         strncpy(entries[entries_found], name, TAR_NAME_SIZE);
+                        entries[entries_found][TAR_NAME_SIZE] = '\0';
                     }
                 }
                 entries_found++;
             }
         }
     }
+
     *no_entries = entries_found;
     return entries_found > 0 ? 1 : 0;
 }
-
 /**
  * Reads a file at a given path in the archive.
  *
