@@ -223,7 +223,10 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
                 // Add to entries if there's space
                 if (entries_found < *no_entries) {
                     if(buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE){
-                        strncpy(entries[entries_found], buffer[TAR_LINKNAME_OFFSET], TAR_NAME_SIZE);
+                        char linkname[TAR_NAME_SIZE + 1];
+                        memcpy(linkname, buffer+TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
+                        linkname[TAR_NAME_SIZE] = '\0';
+                        strncpy(entries[entries_found], linkname, TAR_NAME_SIZE);
                     } else {
                         strncpy(entries[entries_found], name, TAR_NAME_SIZE);
                     }
