@@ -375,22 +375,61 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
  *
  */
 
+
+static size_t octal_s(const char *octal){
+    size_t size = 0;
+    sscanf(octal, "%zo", &size);
+    return size;
+
+}
+
+
 ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len) {
-    uint8_t buffer[TAR_BLOCK_SIZE];
-    size_t file_size = 0;
-    size_t blocks_to_skip = 0;
-    
-    // Go back to the beginning of the tar
+    if (tar_fd < 0 || !path || !dest || !len || *len == 0) {
+        return -1;
+    }
+
+    char current_p[TAR_BLOCK_SIZE + 1];
+    strncpy(current_p, path, TAR_NAME_SIZE);
+    current_p[TAR_NAME_SIZE] = '\0';
+    size_t path_len = strlen(path);
+
     if (lseek(tar_fd, 0, SEEK_SET) == -1) {
         return -1;
     }
 
-    // First, find the file and get its size
-    while (read(tar_fd, buffer, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
-        // Check for null block
+    char *adjusted_path = NULL;
+    // add a '/' in the end of the path if it's not yet done 
+    if (path[path_len - 1] != '/' && is_symlink(tar_fd, path) != 1) {
+  
+        adjusted_path = malloc(path_len + 2);
+        if (adjusted_path == NULL) {
+            return 0; 
+        }
+
+
+        strcpy(adjusted_path, path);
+        adjusted_path[path_len] = '/';
+        adjusted_path[path_len + 1] = '\0';
+        path_len += 1;
+    } else {
+       
+        adjusted_path = strdup(path);
+        if (adjusted_path == NULL) {
+            return 0; 
+        }
+    }
+
+    if (lseek(tar_fd, 0, SEEK_SET) == -1) {
+        return -1;
+    }
+
+    uint8_t header[TAR_BLOCK_SIZE];
+    
+    while (read(tar_fd, header, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
         int is_null_block = 1;
         for (int i = 0; i < TAR_BLOCK_SIZE; i++) {
-            if (buffer[i] != 0) {
+            if (header[i] != 0) {
                 is_null_block = 0;
                 break;
             }
@@ -399,83 +438,84 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
             break;
         }
 
-        // Check if this is a symlink that needs resolution
-        if (buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE) {
-            char linkname[TAR_NAME_SIZE + 1];
-            memcpy(linkname, buffer + TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
-            linkname[TAR_NAME_SIZE] = '\0';
-            
-            // Recursively resolve symlink
-            return read_file(tar_fd, linkname, offset, dest, len);
-        }
+        char file_name[TAR_NAME_SIZE + 1];
+        memcpy(file_name, header, TAR_NAME_SIZE);
+        file_name[TAR_NAME_SIZE] = '\0';
 
-        char name[TAR_NAME_SIZE + 1];
-        memcpy(name, buffer, TAR_NAME_SIZE);
-        name[TAR_NAME_SIZE] = '\0';
+        if (strcmp(file_name, path) == 0) {
+            char typeflag = header[TAR_TYPEFLAG_OFFSET];
+            if (typeflag != REGTYPE) {
+                return -1;
+            }
 
-        if (strcmp(name, path) == 0 && buffer[TAR_TYPEFLAG_OFFSET] == REGTYPE) {
-            // Extract file size (in octal)
             char size_str[12];
-            memcpy(size_str, buffer + 124, 11);
+            memcpy(size_str, header + 124, 11);
             size_str[11] = '\0';
-            file_size = (size_t)strtol(size_str, NULL, 8);
+            size_t file_size = octal_s(size_str);
 
-            // Check if offset is valid
             if (offset >= file_size) {
                 return -2;
             }
 
-            // Calculate how many blocks to skip to get to the offset
-            blocks_to_skip = offset / TAR_BLOCK_SIZE;
-            size_t block_offset = offset % TAR_BLOCK_SIZE;
+            size_t bytes_to_read = *len;
+            if (offset + bytes_to_read > file_size) {
+                bytes_to_read = file_size - offset;
+            }
 
-            // Skip to the correct data block
+            size_t blocks_to_skip = offset / TAR_BLOCK_SIZE;
+            size_t block_offset = offset % TAR_BLOCK_SIZE;
+            
             for (size_t i = 0; i < blocks_to_skip; i++) {
-                if (read(tar_fd, buffer, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+                if (read(tar_fd, header, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
                     return -1;
                 }
             }
 
-            // Read the block containing the offset
-            if (read(tar_fd, buffer, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+            uint8_t first_block[TAR_BLOCK_SIZE];
+            if (read(tar_fd, first_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
                 return -1;
             }
 
-            // Calculate how many bytes we can read
-            size_t bytes_to_read = (file_size - offset < *len) ? file_size - offset : *len;
-            
-            // Adjust for block offset
-            size_t start_index = block_offset;
-            size_t copy_size = TAR_BLOCK_SIZE - start_index < bytes_to_read ? 
-                               TAR_BLOCK_SIZE - start_index : bytes_to_read;
-            
-            // Copy data to destination
-            memcpy(dest, buffer + start_index, copy_size);
-            
-            size_t bytes_read = copy_size;
+            size_t first_copy = (TAR_BLOCK_SIZE - block_offset < bytes_to_read) ? 
+                TAR_BLOCK_SIZE - block_offset : bytes_to_read;
+            memcpy(dest, first_block + block_offset, first_copy);
 
-            // If we need to read more, continue reading blocks
-            while (bytes_read < bytes_to_read) {
-                if (read(tar_fd, buffer, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
-                    break;
-                }
-
-                size_t remaining = bytes_to_read - bytes_read;
-                size_t to_copy = remaining < TAR_BLOCK_SIZE ? remaining : TAR_BLOCK_SIZE;
+            size_t total_read = first_copy;
+            while (total_read < bytes_to_read) {
+                size_t remaining = bytes_to_read - total_read;
+                size_t to_read = remaining > TAR_BLOCK_SIZE ? TAR_BLOCK_SIZE : remaining;
                 
-                memcpy(dest + bytes_read, buffer, to_copy);
-                bytes_read += to_copy;
+                if (read(tar_fd, first_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+                    return -1;
+                }
+                
+                memcpy(dest + total_read, first_block, to_read);
+                total_read += to_read;
             }
 
-            // Set the number of bytes actually read
-            *len = bytes_read;
+            
+            *len = total_read;
 
-            // Return remaining bytes (if any)
-            return file_size - (offset + bytes_read) > 0 ? 
-                   file_size - (offset + bytes_read) : 0;
+            
+            return (offset + total_read == file_size) ? 0 : (file_size - (offset + total_read));
+        }
+
+        
+        char size_str[12];
+        memcpy(size_str, header + 124, 11);
+        size_str[11] = '\0';
+        size_t file_size = octal_s(size_str);
+        size_t blocks = (file_size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
+        
+        
+        for (size_t i = 0; i < blocks; i++) {
+            uint8_t skip_block[TAR_BLOCK_SIZE];
+            if (read(tar_fd, skip_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
+                return -1;
+            }
         }
     }
 
-    // File not found
+
     return -1;
 }
