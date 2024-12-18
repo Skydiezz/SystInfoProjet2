@@ -259,13 +259,39 @@ int check_for_list(char *name, size_t pathlen){
 int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
     uint8_t buffer[TAR_BLOCK_SIZE];
     size_t entries_found = 0;
+    size_t path_len = strlen(path);
+
+
+
+ 
+    char *adjusted_path = NULL;
+    // add a '/' in the end of the path if it's not yet done 
+    if (path[path_len - 1] != '/' && is_symlink(tar_fd, path) != 1) {
+  
+        adjusted_path = malloc(path_len + 2);
+        if (adjusted_path == NULL) {
+            return 0; 
+        }
+
+
+        strcpy(adjusted_path, path);
+        adjusted_path[path_len] = '/';
+        adjusted_path[path_len + 1] = '\0';
+        path_len += 1;
+    } else {
+       
+        adjusted_path = strdup(path);
+        if (adjusted_path == NULL) {
+            return 0; 
+        }
+    }
+
 
     // Go back to the beginning of the tar
     if (lseek(tar_fd, 0, SEEK_SET) == -1) {
         return 0;
     }
 
-    size_t path_len = strlen(path);
     while (read(tar_fd, buffer, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
         // Check for null block
         int is_null_block = 1;
@@ -284,14 +310,16 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
         name[TAR_NAME_SIZE] = '\0';
 
         // Check if the entry matches the given path
-        if (strncmp(name, path, path_len) == 0) {
-            if (strncmp(name, path, path_len) == 0) {
+        if (strncmp(name, adjusted_path, path_len) == 0) {
+          
                 if(strlen(name) == path_len){
-                    printf("La fonction ma_fonction a été appelée depuis %s : %s\n", __FILE__, name);
+                    
                     if(buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE){
+    
                         char linkname[TAR_NAME_SIZE + 1];
                         memcpy(linkname, buffer + TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
                         linkname[TAR_NAME_SIZE] = '\0';
+                        free(adjusted_path);
                         return list(tar_fd, linkname, entries, no_entries);
                     } else {
                         continue;
@@ -309,20 +337,21 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
                                 return 0;
                             }
 
-   
-                                strncpy(entries[entries_found], name, TAR_NAME_SIZE);
-                                entries[entries_found][TAR_NAME_SIZE] = '\0';
+
+                            strncpy(entries[entries_found], name, TAR_NAME_SIZE);
+                            entries[entries_found][TAR_NAME_SIZE] = '\0';
 
                         }
                         entries_found++;
                     }
 
                 }
-            }
+
         }
     }
 
     *no_entries = entries_found;
+    free(adjusted_path);
     return entries_found > 0 ? 1 : 0;
 }
 
