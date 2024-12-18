@@ -220,6 +220,19 @@ int is_symlink(int tar_fd, char *path) {
     return is_smth(tar_fd, path, (char) SYMTYPE);
 }
 
+int check_for_list(char *name, size_t pathlen){
+    int check = 0;
+    for(int i=pathlen+1; name[i] != '\0'; i++){
+        if(name[i]=='/'){
+            check += 1;
+        }
+    }
+    return check;
+
+
+}
+
+
 
 /**
  * Lists the entries at a given path in the archive.
@@ -272,31 +285,39 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
 
         // Check if the entry matches the given path
         if (strncmp(name, path, path_len) == 0) {
-            if (strncmp(name, path, path_len) == 0 && strlen(name)-1 > path_len) {
-                if (entries_found < *no_entries) {
-                    // Allocate memory for the entry
-                    entries[entries_found] = malloc(TAR_NAME_SIZE + 1);
-                    if (entries[entries_found] == NULL) {
-                        fprintf(stderr, "Memory allocation failed\n");
-                        // Clean up already allocated entries
-                        for (size_t i = 0; i < entries_found; i++) {
-                            free(entries[i]);
-                        }
-                        return 0;
-                    }
-
-                    if (buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE) {
+            if (strncmp(name, path, path_len) == 0) {
+                if(strlen(name) == path_len){
+                    printf("La fonction ma_fonction a été appelée depuis %s : %s\n", __FILE__, name);
+                    if(buffer[TAR_TYPEFLAG_OFFSET] == SYMTYPE){
                         char linkname[TAR_NAME_SIZE + 1];
                         memcpy(linkname, buffer + TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
                         linkname[TAR_NAME_SIZE] = '\0';
-                        strncpy(entries[entries_found], linkname, TAR_NAME_SIZE);
-                        entries[entries_found][TAR_NAME_SIZE] = '\0';
+                        return list(tar_fd, linkname, entries, no_entries);
                     } else {
-                        strncpy(entries[entries_found], name, TAR_NAME_SIZE);
-                        entries[entries_found][TAR_NAME_SIZE] = '\0';
+                        continue;
                     }
+                } else {
+                    if((check_for_list(name, path_len) == 1 && buffer[TAR_TYPEFLAG_OFFSET] == DIRTYPE) || check_for_list(name, path_len) == 0){
+                        if (entries_found < *no_entries) {
+                        // Allocate memory for the entry
+                            entries[entries_found] = malloc(TAR_NAME_SIZE + 1);
+                            if (entries[entries_found] == NULL) {
+                                fprintf(stderr, "Memory allocation failed\n");
+                                for (size_t i = 0; i < entries_found; i++) {
+                                    free(entries[i]);
+                                }
+                                return 0;
+                            }
+
+   
+                                strncpy(entries[entries_found], name, TAR_NAME_SIZE);
+                                entries[entries_found][TAR_NAME_SIZE] = '\0';
+
+                        }
+                        entries_found++;
+                    }
+
                 }
-                entries_found++;
             }
         }
     }
@@ -304,6 +325,8 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
     *no_entries = entries_found;
     return entries_found > 0 ? 1 : 0;
 }
+
+
 /**
  * Reads a file at a given path in the archive.
  *
