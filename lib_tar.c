@@ -392,40 +392,13 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
     char current_p[TAR_BLOCK_SIZE + 1];
     strncpy(current_p, path, TAR_NAME_SIZE);
     current_p[TAR_NAME_SIZE] = '\0';
-    size_t path_len = strlen(path);
-
-    if (lseek(tar_fd, 0, SEEK_SET) == -1) {
-        return -1;
-    }
-
-    char *adjusted_path = NULL;
-    // add a '/' in the end of the path if it's not yet done 
-    if (path[path_len - 1] != '/' && is_symlink(tar_fd, path) != 1) {
-  
-        adjusted_path = malloc(path_len + 2);
-        if (adjusted_path == NULL) {
-            return 0; 
-        }
-
-
-        strcpy(adjusted_path, path);
-        adjusted_path[path_len] = '/';
-        adjusted_path[path_len + 1] = '\0';
-        path_len += 1;
-    } else {
-       
-        adjusted_path = strdup(path);
-        if (adjusted_path == NULL) {
-            return 0; 
-        }
-    }
 
     if (lseek(tar_fd, 0, SEEK_SET) == -1) {
         return -1;
     }
 
     uint8_t header[TAR_BLOCK_SIZE];
-    
+
     while (read(tar_fd, header, TAR_BLOCK_SIZE) == TAR_BLOCK_SIZE) {
         int is_null_block = 1;
         for (int i = 0; i < TAR_BLOCK_SIZE; i++) {
@@ -444,6 +417,17 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
 
         if (strcmp(file_name, path) == 0) {
             char typeflag = header[TAR_TYPEFLAG_OFFSET];
+            
+            // Handle symlink case
+            if (typeflag == '2') { // '2' indicates a symlink
+                char linked_path[TAR_NAME_SIZE + 1];
+                memcpy(linked_path, header + TAR_LINKNAME_OFFSET, TAR_NAME_SIZE);
+                linked_path[TAR_NAME_SIZE] = '\0';
+
+                // Recursive call to resolve the symlink
+                return read_file(tar_fd, linked_path, offset, dest, len);
+            }
+
             if (typeflag != REGTYPE) {
                 return -1;
             }
@@ -464,7 +448,7 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
 
             size_t blocks_to_skip = offset / TAR_BLOCK_SIZE;
             size_t block_offset = offset % TAR_BLOCK_SIZE;
-            
+
             for (size_t i = 0; i < blocks_to_skip; i++) {
                 if (read(tar_fd, header, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
                     return -1;
@@ -476,7 +460,7 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
                 return -1;
             }
 
-            size_t first_copy = (TAR_BLOCK_SIZE - block_offset < bytes_to_read) ? 
+            size_t first_copy = (TAR_BLOCK_SIZE - block_offset < bytes_to_read) ?
                 TAR_BLOCK_SIZE - block_offset : bytes_to_read;
             memcpy(dest, first_block + block_offset, first_copy);
 
@@ -484,30 +468,25 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
             while (total_read < bytes_to_read) {
                 size_t remaining = bytes_to_read - total_read;
                 size_t to_read = remaining > TAR_BLOCK_SIZE ? TAR_BLOCK_SIZE : remaining;
-                
+
                 if (read(tar_fd, first_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
                     return -1;
                 }
-                
+
                 memcpy(dest + total_read, first_block, to_read);
                 total_read += to_read;
             }
 
-            
             *len = total_read;
-
-            
             return (offset + total_read == file_size) ? 0 : (file_size - (offset + total_read));
         }
 
-        
         char size_str[12];
         memcpy(size_str, header + 124, 11);
         size_str[11] = '\0';
         size_t file_size = octal_s(size_str);
         size_t blocks = (file_size + TAR_BLOCK_SIZE - 1) / TAR_BLOCK_SIZE;
-        
-        
+
         for (size_t i = 0; i < blocks; i++) {
             uint8_t skip_block[TAR_BLOCK_SIZE];
             if (read(tar_fd, skip_block, TAR_BLOCK_SIZE) != TAR_BLOCK_SIZE) {
@@ -515,7 +494,6 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
             }
         }
     }
-
 
     return -1;
 }
